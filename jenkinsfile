@@ -1,10 +1,120 @@
+//simple example 1
+pipeline {
+    //agent refers to the environment in which to execute the pipeline
+    //docker containers simplify the execution by allowing Jenkins to define
+    //all its required elements system agnostically
+    //any commands being executed in this pipeline should use the appropriate commands for the given agent
+    agent { docker { image 'maven:3.8.4-openjdk-11-slim' } }
+    
+    //environment variables can be set globally as shown below, or stage-specifically
+    environment {
+        DISABLE_AUTH = 'true'
+        DB_ENGINE = 'sqlite'
+    }
+
+    options {
+        //default behavior continues pipeline after errors, this stops it
+        skipStagesAfterUnstable()
+    }
+
+    stages {
+        stage('build') {
+            //stage-specific environment variable
+            environment {
+                //double backslash is needed to account for character escapes
+                HOME_DIR = '/home/user'
+            }
+            steps {
+                sh 'mvn --version'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Testing'
+            }
+        }
+
+        stage('Deploy - Staging') {
+            steps {
+                //check which branch we're on (git), only run if on development branch
+                when {
+                    branch 'development'
+                }
+                echo 'Staging'
+                sh './deploy-staging'
+                sh './run-smoke-tests'
+            }
+        }
+
+        stage('Deploy - Production') {
+            steps {
+                //check which branch we're on (git), only run if on production branch
+                when {
+                    branch 'production'
+                }
+                echo '**Deploying to Production**'
+                //require user input to confirm before pushing production code
+                input "Are you sure you want to push to production?"
+                sh './deploy-production'
+            }
+        }
+    }
+}
+
+//simple example 2
 pipeline {
     agent any
     stages {
-        stage('Build') {
+        stage('Test') {
             steps {
-                bat 'set'
+                //timeout syntax
+                timeout(time: 3, unit:'MINUTES') {
+                    //retry 5 times
+                    retry(5) {
+                        bat 'some_script.bat'
+                    }
+                }
+                bat 'echo "Fail!"; exit 1'
             }
+        }
+    }
+    post {
+        always {
+            echo 'This will always run'
+            //saves the artifacts from the build process to assist in debugging failed tests
+            archiveArtifacts artifacts: 'build/libs/**/*.jar', fingerprint: true
+            //create test reports using junit and track them in Jenkins
+            junit 'build/reports/**/*.xml'
+            //clean up your workspace/build folder
+            deleteDir('whatever')
+        }
+        success {
+            echo 'This will run only if successful'
+        }
+        failure {
+            echo 'This will run only if failed'
+            //notify someone that there was a failure with any of the commands below
+            //email
+            mail to: 'joseph.daoud93@gmail.com',
+                subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
+                body: "Something is wrong with ${env.BUILD_URL}"
+            
+            //hipchat
+                hipchatSent message: "Attention @here ${env.JOB_NAME} #${env.BUILD_NUMBER} has failed.",
+                color: 'RED'
+
+            //Slack
+                slackSend channel: 'ops-room',
+                    color: 'bad',
+                    message: "The pipeline ${currentBuild.fullSisplayName} failed."
+        }
+        unstable {
+            echo 'This will run only if the run was marked as unstable'
+        }
+        changed {
+            echo 'This will run only if the state of the Pipeline has changed'
+            echo 'For example, if the Pipeline was previously failing but is now successful'
         }
     }
 }
